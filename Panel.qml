@@ -405,6 +405,12 @@ Panel {
         flickableDirection: Flickable.VerticalFlick
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+        // Touchpad gain, precise steps and momentum after the fingers lift.
+        SmoothWheel {
+          id: smoothWheel
+          flickable: scroller
+        }
+
         Column {
           id: column
           width: scroller.width
