@@ -37,15 +37,18 @@ oculto, e o resto do painel continua funcionando.
 ## Instalação
 
 ```bash
-git clone <este repositório> ~/Projects/omarchy-redmi-phone
-ln -s ~/Projects/omarchy-redmi-phone ~/.config/omarchy/plugins/eusener.headphones
-omarchy bar put eusener.headphones --section right
+omarchy plugin add https://github.com/eusener/omarchy-redmi-phone.git --enable
 ```
 
-Para abrir o painel por atalho: `omarchy-shell eusener.headphones toggle`.
+O widget entra na seção direita da barra. Para movê-lo:
+`omarchy bar move eusener.headphones --section right`. Para abrir o painel por
+atalho: `omarchy-shell eusener.headphones toggle`.
+
+Atualizar: `omarchy plugin update eusener.headphones`.
 
 **Dependências:** já vêm no Omarchy (`bluez`, `bluez-utils`, `pipewire-pulse`,
-`wireplumber`, `jq`, `python3`).
+`wireplumber`, `jq`, `python3`). Nenhum pacote é instalado e nenhuma permissão de
+administrador é pedida.
 
 Opcional: `bluez-deprecated-tools`, que traz o `sdptool`. Sem ele, o plugin
 encontra o canal de controle Xiaomi pelo canal conhecido do modelo ou varrendo
@@ -70,16 +73,20 @@ os canais 1 a 30, e guarda o resultado em cache.
 ## Remover
 
 ```bash
-# 1. tire "eusener.headphones" de bar.layout em ~/.config/omarchy/shell.json
-rm ~/.config/omarchy/plugins/eusener.headphones
-# 2. se quiser, desfaça as configurações
-wpctl settings --save bluetooth.autoswitch-to-headset-profile true   # padrão
-systemctl --user disable --now mpris-proxy
-rm -r ~/.local/state/eusener-headphones
+omarchy plugin remove eusener.headphones
+```
+
+A remoção não desfaz as configurações que você ligou pelo painel. Para voltar
+ao padrão:
+
+```bash
+wpctl settings --save bluetooth.autoswitch-to-headset-profile true   # padrão do WirePlumber
+systemctl --user disable --now mpris-proxy                           # se ligou "Botões do fone"
+rm -r ~/.local/state/eusener-headphones                              # cache do canal Xiaomi
 ```
 
 O que foi gravado no fone (EQ, gestos, latência) pode ser revertido pelo próprio
-painel ou pelo app Xiaomi Earbuds.
+painel, antes de remover, ou pelo app Xiaomi Earbuds.
 
 ## Desenvolvimento
 
@@ -100,6 +107,14 @@ node tests/test_model.js
 bash tests/test_ctl.sh
 python3 -I tests/test_buds_vendor.py
 python3 -I -m unittest discover -s tests/vendor -t tests/vendor
+```
+
+Para desenvolver, troque a cópia instalada por um symlink para o seu clone:
+
+```bash
+omarchy plugin remove eusener.headphones
+ln -s ~/Projects/omarchy-redmi-phone ~/.config/omarchy/plugins/eusener.headphones
+omarchy plugin enable eusener.headphones
 ```
 
 O watcher de plugins do shell (`inotifywait -r`) não segue o symlink. Depois de

@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "author": "Eusener Castilho",
   "description": "Bluetooth headphone controls: battery, audio mode, codec, media buttons and Xiaomi/Redmi vendor features",
+  "license": "GPL-3.0-only",
   "kinds": [
     "bar-widget"
   ],

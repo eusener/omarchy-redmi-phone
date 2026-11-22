@@ -20,9 +20,9 @@ Código: `vendor/mibuds` (MiBudsClient@52eb3f94 adaptado).
 Conclusão: a autenticação **não é exigida**, mas funciona. O canal 6 aceita as duas
 políticas.
 
-A captura `btmon -w captures/…` ficou vazia (16 bytes): o `btmon` precisa de root
-(`CAP_NET_RAW`). Para capturar, rode `sudo btmon -w captures/redmi-$(date +%F).btsnoop`
-num terminal enquanto o helper executa.
+A captura `btmon -w captures/…` ficou vazia (16 bytes): o `btmon` precisa rodar
+como root (`CAP_NET_RAW`). Para capturar, rode `btmon -w captures/redmi-$(date +%F).btsnoop`
+como root num terminal enquanto o helper executa.
 
 ### Recursos (7.3), todos pelo caminho `direct`, valores originais restaurados
 
