@@ -62,6 +62,12 @@
 - [ ] 9.4 Adicionar mensagens traduzidas para `refused`, `auth_failed`, `timeout`, `protocol` com "tentar de novo" e ação "atualizar"; verificar desligando o fone durante uma leitura e conferindo que a camada 1 continua funcionando
 - [x] 9.5 Completar `i18n/en.json` e `i18n/pt-BR.json` com as strings da seção Xiaomi (nomes de presets, gestos e ações) e verificar a troca de idioma ao vivo
 
+## 12. Escolha do microfone (fone / notebook)
+
+- [x] 12.1 Implementar `headphones-ctl mic <MAC> internal|headset` e `status.mic` (D14), com testes em `tests/test_ctl.sh` para a fonte ALSA escolhida, a troca automática gravada com `--save`, o A2DP preservado e valores inválidos recusados; verificar com `bash tests/test_ctl.sh`
+- [x] 12.2 Verificar no fone real: partindo de HFP, `mic internal` volta o fone para `a2dp-sink`; uma gravação com `parecord` mantém `a2dp-sink`; `mic headset` volta a trocar para HFP durante a gravação e de volta para A2DP depois
+- [x] 12.3 Adicionar ao painel o seletor "Microfone: Fone / Notebook" (oculto sem microfone interno), com texto explicativo e strings en/pt-BR; verificar que ele reflete o modo ativo depois de uma troca feita pelo helper
+
 ## 10. Documentação
 
 - [x] 10.1 Escrever `README.md` (instalação via symlink + `omarchy bar put`, recursos das duas camadas, `bluez-deprecated-tools` opcional, efeitos colaterais do autoswitch e do mpris-proxy, rollback, seção de licença GPL-3.0-only com crédito ao MiBudsClient e link para `vendor/mibuds/README.md`) e verificar seguindo a instalação do zero após remover o symlink

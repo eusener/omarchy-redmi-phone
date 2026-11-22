@@ -153,6 +153,16 @@ Um canal só é aceito se responder a um pedido RCSP (`GET_DEVICE_INFO`) com fra
 ### D13. Seção "Recursos Xiaomi" no painel
 O painel roda `buds-vendor probe` quando o fone ativo anuncia FD2D e o painel abre. Com sucesso, ele monta só os recursos que o `probe` reportou. Gravações usam o mesmo padrão de estado pendente da camada 1, e a confirmação vem da releitura feita pelo próprio helper. Erros (`refused`, `auth_failed`, `timeout`, `protocol`) viram mensagens traduzidas com "tentar de novo". O widget de barra continua usando só a bateria do BlueZ e não abre RFCOMM.
 
+### D14. Escolha do microfone: fone ou notebook
+Com a troca automática ligada, o WirePlumber cria uma fonte virtual `bluez_input.<MAC>` (com dois-pontos), mesmo em A2DP, e a torna a entrada padrão. É por isso que qualquer app que grava derruba o fone para HFP: o Bluetooth Clássico não tem perfil com áudio de alta qualidade nos dois sentidos, e o fone não oferece LE Audio nem codecs A2DP duplex.
+
+`headphones-ctl mic <MAC> internal|headset` combina três ajustes já existentes:
+- **internal:** desliga a troca automática (com a espera de persistência do D7), define como padrão a fonte ALSA de captura do computador (nunca um `.monitor`, preferindo nomes com "mic") e, se o fone estiver em HFP, volta ao perfil A2DP de maior prioridade.
+- **headset:** religa a troca automática, espera a fonte virtual aparecer (até 3 s) e a define como padrão.
+
+O estado lido (`status.mic.source`) vem sempre da entrada padrão real: `headset`, `internal` ou `other`.
+- *Alternativa:* só trocar a entrada padrão, sem mexer na troca automática. Foi descartada porque, com a troca ligada, o WirePlumber recria a fonte virtual e ela volta a ganhar prioridade.
+
 ## Risks / Trade-offs
 
 - **Trocar para HFP derruba a qualidade e pode cortar o áudio por ~1 s.** → O rótulo do modo "Chamada" explica a troca, e o painel nunca troca sozinho.

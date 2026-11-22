@@ -55,3 +55,22 @@ Toda alteração de sistema feita pelo plugin SHALL passar endereço e perfil co
 #### Scenario: Perfil inválido
 - **WHEN** o helper recebe o perfil `a2dp-sink; rm -rf ~`
 - **THEN** recusa com erro, sem executar nada
+
+### Requirement: Escolha do microfone
+Quando o computador tem um microfone próprio, o painel SHALL oferecer a escolha "Fone" ou "Notebook". Em "Notebook", o sistema SHALL usar o microfone do computador como entrada padrão e manter o fone no modo Música mesmo quando um app grava. Em "Fone", SHALL usar o microfone do fone, que passa para o modo Chamada enquanto um app grava.
+
+#### Scenario: Gravar com o microfone do notebook
+- **WHEN** a escolha é "Notebook" e um app começa a gravar
+- **THEN** o app grava pelo microfone do computador e o perfil do fone continua A2DP
+
+#### Scenario: Sair de uma chamada para o notebook
+- **WHEN** o fone está em modo Chamada e o usuário escolhe "Notebook"
+- **THEN** o fone volta ao perfil A2DP de maior prioridade e a entrada padrão passa a ser o microfone do computador
+
+#### Scenario: Gravar com o microfone do fone
+- **WHEN** a escolha é "Fone" e um app começa a gravar
+- **THEN** o fone passa para o modo Chamada durante a gravação e volta para Música depois
+
+#### Scenario: Computador sem microfone
+- **WHEN** não existe nenhuma fonte de captura do próprio computador
+- **THEN** a escolha não é exibida

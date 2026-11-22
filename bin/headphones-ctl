@@ -10,6 +10,9 @@
 #   autoswitch on|off            WirePlumber headset-profile autoswitch (persisted)
 #   media-buttons on|off         AVRCP -> MPRIS forwarding (mpris-proxy user unit)
 #   connect|disconnect <MAC>     delegate to omarchy-bluetooth-device
+#   mic <MAC> headset|internal   microphone source: the headphones (HFP when an app
+#                                records) or the computer's own mic (headphones stay
+#                                in high-quality A2DP)
 #
 # Every argument is validated before use, and every command receives its
 # arguments as separate words: nothing from a device or another command's
@@ -83,9 +86,83 @@ cmd_status() {
     --argjson autoswitch "$(autoswitch_state)" \
     --argjson media "$(media_buttons_json)" \
     --argjson uuids "$(uuids_json "$mac")" \
+    --argjson mic "$(mic_json "$mac")" \
     '{ok: true, address: $mac, card: $card,
       isDefaultSink: ($default | startswith($prefix)),
-      autoswitch: $autoswitch, mediaButtons: $media, uuids: $uuids}'
+      autoswitch: $autoswitch, mediaButtons: $media, uuids: $uuids, mic: $mic}'
+}
+
+# Sources whose name starts with either spelling WirePlumber uses for this
+# headset: the HFP node (bluez_input.AA_BB_…) or the autoswitch loopback
+# (bluez_input.AA:BB:…).
+headset_source() {
+  pactl list sources short 2>/dev/null |
+    awk -v a="bluez_input.$1" -v b="bluez_input.${1//:/_}" \
+      '$2 !~ /\.monitor$/ && (index($2, a) == 1 || index($2, b) == 1) { print $2; exit }'
+}
+
+# The computer's own microphone: an ALSA capture source, never a monitor.
+internal_source() {
+  pactl --format=json list sources 2>/dev/null | jq -r '
+    [.[] | select(.properties["media.class"] == "Audio/Source"
+                  and .properties["device.api"] == "alsa"
+                  and (.name | endswith(".monitor") | not))]
+    | (map(select(.name | test("mic"; "i"))) + .) | .[0].name // empty'
+}
+
+mic_json() {
+  local default headset internal
+  default=$(pactl get-default-source 2>/dev/null || true)
+  headset=$(headset_source "$1")
+  internal=$(internal_source)
+  jq -cn --arg d "$default" --arg h "$headset" --arg i "$internal" --arg a "bluez_input.$1" --arg b "bluez_input.${1//:/_}" '
+    {defaultSource: $d, internalAvailable: ($i != ""),
+     source: (if ($d | startswith($a)) or ($d | startswith($b)) then "headset"
+              elif $i != "" and $d == $i then "internal" else "other" end)}'
+}
+
+wait_for_autoswitch() {
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/sm-settings" i
+  for ((i = 0; i < 60; i++)); do
+    grep -qx "$AUTOSWITCH_KEY=$1" "$state" 2>/dev/null && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
+cmd_mic() {
+  need_mac "${1:-}"
+  local mac=$1 which=${2:-} source="" i best
+  case "$which" in
+    internal)
+      source=$(internal_source)
+      [[ -n $source ]] || die "no_internal_mic"
+      # Stop WirePlumber from pulling the headphones into HFP, and bring them
+      # back to the best A2DP profile if a call left them there.
+      wpctl settings --save "$AUTOSWITCH_KEY" false >/dev/null || die "autoswitch_failed" 1
+      wait_for_autoswitch false || die "autoswitch_not_persisted" 1
+      pactl set-default-source "$source" || die "set_source_failed" 1
+      best=$(card_json "$mac" | jq -r '
+        if . == null or (.active_profile | startswith("a2dp-sink")) then empty
+        else [.profiles | to_entries[] | select(.key | startswith("a2dp-sink"))
+              | select(.value.available != false)] | max_by(.value.priority) | .key // empty end')
+      if [[ -n $best ]]; then pactl set-card-profile "$(card_name "$mac")" "$best" || die "set_profile_failed" 1; fi
+      ;;
+    headset)
+      wpctl settings --save "$AUTOSWITCH_KEY" true >/dev/null || die "autoswitch_failed" 1
+      wait_for_autoswitch true || die "autoswitch_not_persisted" 1
+      # The autoswitch loopback source appears shortly after the setting.
+      for ((i = 0; i < 60; i++)); do
+        source=$(headset_source "$mac")
+        [[ -n $source ]] && break
+        sleep 0.05
+      done
+      [[ -n $source ]] || die "no_headset_mic" 1
+      pactl set-default-source "$source" || die "set_source_failed" 1
+      ;;
+    *) die "invalid_mic" ;;
+  esac
+  jq -cn --argjson m "$(mic_json "$mac")" '{ok: true, mic: $m}'
 }
 
 cmd_set_profile() {
@@ -123,12 +200,7 @@ cmd_autoswitch() {
   wpctl settings --save "$AUTOSWITCH_KEY" "$SWITCH" >/dev/null || die "autoswitch_failed" 1
   # WirePlumber writes saved settings to disk about a second later; a logout or
   # restart inside that window would silently drop the choice. Wait for it.
-  local state="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/sm-settings" i
-  for ((i = 0; i < 60; i++)); do
-    grep -qx "$AUTOSWITCH_KEY=$SWITCH" "$state" 2>/dev/null && break
-    sleep 0.05
-  done
-  ((i < 60)) || die "autoswitch_not_persisted" 1
+  wait_for_autoswitch "$SWITCH" || die "autoswitch_not_persisted" 1
   jq -cn --argjson v "$(autoswitch_state)" '{ok: true, autoswitch: $v}'
 }
 
@@ -160,6 +232,7 @@ main() {
     autoswitch) cmd_autoswitch "$@" ;;
     media-buttons) cmd_media_buttons "$@" ;;
     connect | disconnect) cmd_device "$cmd" "$@" ;;
+    mic) cmd_mic "$@" ;;
     *) die "usage" ;;
   esac
 }

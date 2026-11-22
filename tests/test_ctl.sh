@@ -37,6 +37,14 @@ case "$*" in
 JSON
   ;;
   "get-default-sink") echo "bluez_output.AA_BB_CC_DD_EE_FF.1" ;;
+  "get-default-source") echo "bluez_input.AA:BB:CC:DD:EE:FF" ;;
+  "list sources short") printf "1\talsa_output.speaker.monitor\tPipeWire\n2\talsa_input.pci.HiFi__Mic__source\tPipeWire\n3\tbluez_input.AA:BB:CC:DD:EE:FF\tPipeWire\n" ;;
+  "--format=json list sources") cat <<JSON
+[{"name":"alsa_output.speaker.monitor","properties":{"media.class":"Audio/Sink","device.api":"alsa"}},
+ {"name":"alsa_input.pci.HiFi__Mic__source","properties":{"media.class":"Audio/Source","device.api":"alsa"}},
+ {"name":"bluez_input.AA:BB:CC:DD:EE:FF","properties":{"media.class":"Audio/Source","device.api":"bluez5"}}]
+JSON
+  ;;
   "list sinks short") printf "69\talsa_output.speaker\tPipeWire\n90\tbluez_output.AA_BB_CC_DD_EE_FF.1\tPipeWire\n" ;;
 esac
 exit 0'
@@ -105,6 +113,22 @@ check "autoswitch reports a save that never reached disk" grep -q '"autoswitch_n
 
 out=$(run media-buttons on); rc=$?
 check "media-buttons on enables the unit" bash -c "tr '\n' ' ' <'$LOG' | grep -q '\[--user\] \[enable\] \[--now\] \[mpris-proxy.service\]'"
+
+out=$(run status "$MAC"); rc=$?
+check "status reports the headset mic as default" jqe '.mic.source == "headset" and .mic.internalAvailable' <<<"$out"
+
+out=$(run mic "$MAC" internal); rc=$?
+check "mic internal succeeds (rc=$rc)" test "$rc" -eq 0
+check "mic internal turns autoswitch off" bash -c "tr '\n' ' ' <'$LOG' | grep -q '\[settings\] \[--save\] \[bluetooth.autoswitch-to-headset-profile\] \[false\]'"
+check "mic internal picks the ALSA mic, not a monitor" bash -c "tr '\n' ' ' <'$LOG' | grep -q '\[set-default-source\] \[alsa_input.pci.HiFi__Mic__source\]'"
+check "mic internal leaves A2DP alone" bash -c "! grep -q '\[set-card-profile\]' '$LOG'"
+
+out=$(run mic "$MAC" headset); rc=$?
+check "mic headset selects the bluez source" bash -c "tr '\n' ' ' <'$LOG' | grep -q '\[set-default-source\] \[bluez_input.AA:BB:CC:DD:EE:FF\]'"
+
+out=$(run mic "$MAC" 'internal; reboot'); rc=$?
+check "bad mic value refused" grep -q '"invalid_mic"' <<<"$out"
+check "bad mic value: nothing changed" bash -c "! grep -q 'set-default-source\|--save' '$LOG'"
 
 out=$(run connect "$MAC"); rc=$?
 check "connect delegates to omarchy-bluetooth-device" called omarchy-bluetooth-device

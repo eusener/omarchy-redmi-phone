@@ -16,6 +16,10 @@ Xiaomi Earbuds do celular.
 - **Usar como saída**: torna o fone a saída de áudio padrão.
 - **Modo chamada automático**: troca para Chamada quando um app abre o microfone
   (configuração `bluetooth.autoswitch-to-headset-profile` do WirePlumber).
+- **Microfone: Fone / Notebook**: no modo Notebook, os apps gravam pelo microfone
+  do computador e o fone continua com áudio de música. O Bluetooth Clássico não
+  tem perfil com alta qualidade nos dois sentidos, então o microfone do fone
+  sempre derruba o áudio para qualidade de chamada.
 - **Botões do fone controlam o player**: toques no fone tocam, pausam e pulam
   faixas (serviço `mpris-proxy` do BlueZ).
 - Conectar o último fone usado e desconectar.

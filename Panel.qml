@@ -181,6 +181,10 @@ Panel {
     if (!statusFresh || status.autoswitch === null) return
     setSwitch("autoswitch", ["autoswitch", status.autoswitch ? "off" : "on"], strings.t("error.autoswitch", "Could not change automatic call mode."))
   }
+  function setMic(which) {
+    if (!statusFresh || !status.mic || status.mic.source === which) return
+    setSwitch("mic", ["mic", activeAddress, which], strings.t("error.mic", "Could not switch the microphone."))
+  }
   function toggleMediaButtons() {
     if (!statusFresh || !status.mediaButtons || !status.mediaButtons.available) return
     var on = status.mediaButtons.enabled && status.mediaButtons.active
@@ -571,6 +575,41 @@ Panel {
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
                 onClicked: root.makeDefault()
+              }
+            }
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.statusFresh && !!root.status.mic && root.status.mic.internalAvailable
+              PanelSectionHeader {
+                text: strings.t("section.mic", "Microphone")
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+              }
+              ButtonGroup {
+                width: parent.width
+                enabled: root.pendingSwitch === ""
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                options: [
+                  { value: "headset", label: strings.t("mic.headset", "Headphones"), icon: "󰋎",
+                    tooltip: strings.t("mic.headsetHint", "Talk through the headphones; audio drops to call quality while an app records") },
+                  { value: "internal", label: strings.t("mic.internal", "Laptop"), icon: "󰍬",
+                    tooltip: strings.t("mic.internalHint", "Talk through the laptop microphone; the headphones keep high-quality audio") }
+                ]
+                value: root.statusFresh && root.status.mic ? root.status.mic.source : ""
+                onChanged: function(v) { root.setMic(v) }
+              }
+              PlainText {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.statusFresh && root.status.mic && root.status.mic.source === "internal"
+                  ? strings.t("mic.internalNote", "Headphones stay in music quality; apps use the laptop microphone.")
+                  : strings.t("mic.headsetNote", "Apps that use the microphone switch the headphones to call mode.")
+                color: root.bar.foreground
+                opacity: 0.65
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
               }
             }
             Toggle {
