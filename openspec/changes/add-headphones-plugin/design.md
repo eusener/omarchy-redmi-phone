@@ -49,7 +49,7 @@ O id é genérico porque a camada 1 vale para qualquer fone. A estrutura segue o
 ### D3. Leitura de estado: Quickshell, não polling de CLI
 - Fone ativo, conexão e bateria vêm de `Quickshell.Bluetooth`, que é reativo via D-Bus e atende o requisito de até 5 s sem timer.
 - Saída padrão vem de `Pipewire.defaultAudioSink`.
-- Perfil ativo e perfis disponíveis do cartão: os nodes PipeWire do Quickshell não expõem a lista de perfis do *device*. Por isso o helper roda `pactl --format=json list cards` e filtra pelo cartão `bluez_card.<MAC_com_underscores>`. Isso acontece ao abrir o painel, depois de cada troca e por um `Timer` de 3 s só enquanto o painel está aberto.
+- Perfil ativo e perfis disponíveis do cartão: os nodes PipeWire do Quickshell não expõem a lista de perfis do *device*. Por isso o helper roda `pactl --format=json list cards` e filtra pelo cartão `bluez_card.<MAC_com_underscores>`. Isso acontece ao abrir o painel, depois de cada troca e quando o `pactl subscribe` (rodando só com o painel aberto) avisa uma mudança de `card`, `sink`, `source` ou `server`. As rajadas de eventos são agrupadas por um debounce de 250 ms, e uma atualização de segurança a cada 30 s cobre mudanças sem evento (troca automática, `mpris-proxy`). Medido: com o painel aberto e parado, nenhuma execução do helper além da de segurança. Antes, um polling de 3 s gastava cerca de 0,14 s de CPU por rodada.
 - *Alternativa:* `pw-dump` com parsing do objeto Device. Funciona, mas é mais verboso. O `pactl` JSON já entrega `profiles`, `active_profile` e prioridades.
 
 ### D4. Seleção do fone ativo em `Model.js`

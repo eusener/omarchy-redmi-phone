@@ -89,8 +89,11 @@ Panel {
     }
   }
 
+  property bool statusDirty: false
   function refreshStatus() {
-    if (!activeAddress || statusProc.running) return
+    if (!activeAddress) return
+    if (statusProc.running) { statusDirty = true; return }
+    statusDirty = false
     statusProc.command = [ctlPath, "status", activeAddress]
     statusProc.running = true
   }
@@ -103,10 +106,28 @@ Panel {
         var parsed = Model.parseHelperJson(text)
         if (parsed && parsed.ok) root.status = parsed
         root.reconcilePending()
+        if (root.statusDirty) Qt.callLater(root.refreshStatus)
       }
     }
   }
-  Timer { interval: 3000; repeat: true; running: root.opened && root.activeAddress !== ""; onTriggered: root.refreshStatus() }
+  // Event-driven refresh while the panel is open: `pactl subscribe` sleeps until
+  // a card (profile), sink/source (devices) or the server (default device)
+  // changes. Stream events (sink-input/source-output) are ignored; the profile
+  // switch they cause arrives as a card event. Autoswitch and mpris-proxy emit
+  // no pactl events, so a slow fallback catches changes made outside the panel.
+  Process {
+    id: audioEvents
+    running: root.opened && root.activeAddress !== ""
+    command: ["pactl", "subscribe"]
+    environment: ({ LC_ALL: "C" })
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (/ on (card|sink|source|server) #/.test(line)) eventDebounce.restart()
+      }
+    }
+  }
+  Timer { id: eventDebounce; interval: 250; onTriggered: root.refreshStatus() }
+  Timer { interval: 30000; repeat: true; running: audioEvents.running; onTriggered: root.refreshStatus() }
 
   // ---------- Actions ----------
   // One helper action at a time; each is followed by a status refresh.
