@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "eusener.headphones",
+  "name": "Headphones",
+  "version": "0.1.0",
+  "author": "Eusener Castilho",
+  "description": "Bluetooth headphone controls: battery, audio mode, codec, media buttons and Xiaomi/Redmi vendor features",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Headphones",
+    "description": "Battery of the connected Bluetooth headphones; opens the headphone panel",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

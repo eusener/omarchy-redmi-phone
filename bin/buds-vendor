@@ -1,0 +1,410 @@
+#!/usr/bin/env -S python3 -I
+# SPDX-License-Identifier: GPL-3.0-only
+"""buds-vendor — Xiaomi/Redmi earbud features over RFCOMM, as one-shot JSON commands.
+
+  buds-vendor probe <MAC>                         model, features and current values
+  buds-vendor battery <MAC>                       left / right / case battery
+  buds-vendor latency get <MAC> | set <MAC> on|off
+  buds-vendor eq get <MAC> | set <MAC> <profile-id>
+  buds-vendor gestures get <MAC> | set <MAC> <gesture-id> left|right <action-id>
+
+Each call opens one RFCOMM session, runs, closes it, and prints exactly one JSON
+object on stdout: {"ok": true, ...} or {"ok": false, "error": "<code>"}. Exit
+status is 0 on success and non-zero otherwise. Diagnostics go to stderr.
+
+Error codes: usage, invalid_mac, invalid_value, not_connected, unsupported,
+refused, auth_failed, timeout, protocol, unconfirmed, failed.
+"""
+import errno
+import json
+import os
+import pathlib
+import re
+import signal
+import socket
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "vendor"))
+
+from mibuds.auth_session import AuthError, AuthPolicy  # noqa: E402
+from mibuds.session import BudsSession  # noqa: E402
+
+MAC_RE = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
+NAME_RE = re.compile(r"^[\w .,()+&'-]{1,64}$")
+DEADLINE_SECONDS = 10
+SIDES = {"left": 0, "right": 1}
+
+
+class Fail(Exception):
+    def __init__(self, code, detail=""):
+        super().__init__(code)
+        self.code = code
+        self.detail = detail
+
+
+def emit(obj, status=0):
+    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+    return status
+
+
+def debug(*args):
+    print(*args, file=sys.stderr)
+
+
+# ---------- device facts from BlueZ ----------
+def device_info(mac):
+    try:
+        out = subprocess.run(["bluetoothctl", "info", mac], capture_output=True, text=True,
+                             timeout=3, env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    name = ""
+    connected = False
+    uuids = set()
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("Name:"):
+            name = line[5:].strip()
+        elif line.startswith("Connected:"):
+            connected = line.endswith("yes")
+        m = re.search(r"\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)", line, re.I)
+        if m:
+            uuids.add(m.group(1).lower())
+    if not NAME_RE.match(name):
+        name = ""
+    return name, connected, uuids
+
+
+# ---------- channel cache (D12) ----------
+def cache_path():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return pathlib.Path(base) / "eusener-headphones" / "channels.json"
+
+
+def load_cache():
+    try:
+        data = json.loads(cache_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def cache_entry(mac):
+    entry = load_cache().get(mac)
+    if not isinstance(entry, dict):
+        return None
+    ch, policy = entry.get("channel"), entry.get("policy")
+    if type(ch) is not int or not 1 <= ch <= 30 or policy not in ("direct", "command_auth"):
+        return None
+    return ch, policy
+
+
+def store_cache(mac, channel, policy):
+    data = load_cache()
+    if channel is None:
+        data.pop(mac, None)
+    else:
+        data[mac] = {"channel": channel, "policy": policy}
+    path = cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+    os.replace(tmp, path)
+
+
+def try_open(mac, name, channel, policy):
+    session = BudsSession(mac, name, channel=channel, policy=policy)
+    try:
+        session.open(timeout=5)
+        session.target_info(timeout=3)
+        return session
+    except BaseException:
+        session.close()
+        raise
+
+
+def open_session(mac, name):
+    """Cached channel, then SDP / the model's known channel, then a 1–30 scan."""
+    cached = cache_entry(mac)
+    if cached:
+        channel, policy = cached
+        try:
+            return try_open(mac, name, channel, AuthPolicy.DIRECT if policy == "direct" else AuthPolicy.AUTO)
+        except (OSError, ConnectionError, AuthError, TimeoutError, ValueError) as exc:
+            debug(f"cached channel {channel} failed: {type(exc).__name__}: {exc}; rediscovering")
+            store_cache(mac, None, None)
+    try:
+        session = try_open(mac, name, None, AuthPolicy.AUTO)
+    except ConnectionError as exc:
+        if "No usable RFCOMM service" not in str(exc):
+            raise
+        session = scan_channels(mac, name)
+    store_cache(mac, session.result.channel, "command_auth" if session.authenticated else "direct")
+    return session
+
+
+def scan_channels(mac, name):
+    last = None
+    for channel in [6] + [c for c in range(1, 31) if c != 6]:
+        try:
+            # A raw direct session: accepted only if GetTargetInfo answers.
+            return try_open(mac, name, channel, AuthPolicy.DIRECT)
+        except (OSError, ConnectionError, TimeoutError, ValueError, AuthError) as exc:
+            last = exc
+    raise ConnectionError("no RFCOMM channel answered") from last
+
+
+# ---------- feature payloads ----------
+def battery_cell(raw):
+    if type(raw) is not int or raw == 255:
+        return None
+    pct = raw & 0x7F
+    if pct > 100:
+        return None
+    return {"percent": pct, "charging": bool(raw & 0x80)}
+
+
+def battery_json(status):
+    if status is None:
+        return None
+    return {"left": battery_cell(status.left), "right": battery_cell(status.right),
+            "case": battery_cell(status.case)}
+
+
+def gestures_json(result, caps):
+    assignments = {}
+    for gesture, pair in (result.assignments or {}).items():
+        if gesture in caps.gestures and isinstance(pair, tuple) and len(pair) == 2:
+            assignments[str(gesture)] = {"left": pair[0], "right": pair[1]}
+    return assignments
+
+
+def allowed_gestures(caps):
+    return {str(g): list(actions) for g, actions in caps.gestures.items()}
+
+
+def need(caps, feature):
+    if not caps.supports(feature):
+        raise Fail("unsupported", feature)
+
+
+def read_eq(session, caps):
+    need(caps, "eq")
+    r = session.equalizer.read(4, custom=False)
+    if not r.success or r.state is None:
+        raise Fail("protocol", str(r.message))
+    return r.state.profile
+
+
+def read_gestures(session, caps):
+    need(caps, "gestures")
+    r = session.read_gestures(4)
+    if not r.success:
+        raise Fail("protocol", str(r.message))
+    return gestures_json(r, caps)
+
+
+def read_latency(session, caps):
+    need(caps, "latency")
+    return bool(session.latency.read(4))
+
+
+def optional(fn, *args):
+    try:
+        return fn(*args)
+    except Fail:
+        return None
+    except (OSError, ConnectionError, TimeoutError, ValueError) as exc:
+        debug(f"{fn.__name__} failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+# ---------- commands ----------
+def cmd_probe(session, caps, args):
+    identity = session.identity
+    features = sorted(f for f in caps.available if f in ("battery", "eq", "gestures", "latency"))
+    out = {
+        "model": caps.model, "name": caps.name or session.device_name,
+        "firmware": getattr(identity, "firmware_version", None),
+        "authenticated": session.authenticated, "channel": session.result.channel,
+        "features": features,
+        "battery": battery_json(session._battery),
+        "latency": optional(read_latency, session, caps) if "latency" in features else None,
+        "eq": None, "gestures": None,
+    }
+    if "eq" in features:
+        out["eq"] = {"profile": optional(read_eq, session, caps), "profiles": list(caps.profiles)}
+    if "gestures" in features:
+        out["gestures"] = {"assignments": optional(read_gestures, session, caps) or {},
+                           "allowed": allowed_gestures(caps)}
+    # A feature that did not answer is not offered (spec: hidden, others stay).
+    answered = []
+    for f in features:
+        if f == "battery" and out["battery"] is None:
+            continue
+        if f == "latency" and out["latency"] is None:
+            continue
+        if f == "eq" and out["eq"]["profile"] is None:
+            continue
+        if f == "gestures" and not out["gestures"]["assignments"]:
+            continue
+        answered.append(f)
+    out["features"] = answered
+    return out
+
+
+def cmd_battery(session, caps, args):
+    need(caps, "battery")
+    battery = battery_json(session._battery)
+    if battery is None:
+        raise Fail("protocol", "no battery frame")
+    return {"battery": battery}
+
+
+def cmd_latency(session, caps, args):
+    if args.action == "get":
+        return {"latency": read_latency(session, caps)}
+    need(caps, "latency")
+    want = args.value == "on"
+    try:
+        actual = session.latency.write(want, 5)
+    except ValueError as exc:
+        raise Fail("unconfirmed", str(exc))
+    if actual != want:
+        raise Fail("unconfirmed")
+    return {"latency": actual}
+
+
+def cmd_eq(session, caps, args):
+    if args.action == "get":
+        return {"eq": {"profile": read_eq(session, caps), "profiles": list(caps.profiles)}}
+    need(caps, "eq")
+    profile = args.profile
+    if profile not in caps.profiles:
+        raise Fail("invalid_value", "profile not in catalog")
+    read_eq(session, caps)  # the transport refuses writes without a read in this session
+    r = session.equalizer.apply("profile", profile=profile, timeout=5)
+    if not r.success or r.state is None or r.state.profile != profile:
+        raise Fail("unconfirmed", str(r.message))
+    return {"eq": {"profile": r.state.profile, "profiles": list(caps.profiles)}}
+
+
+def cmd_gestures(session, caps, args):
+    if args.action == "get":
+        return {"gestures": {"assignments": read_gestures(session, caps), "allowed": allowed_gestures(caps)}}
+    need(caps, "gestures")
+    allowed = caps.gestures.get(args.gesture)
+    if not allowed or args.gesture_action not in allowed:
+        raise Fail("invalid_value", "gesture/action not in catalog")
+    read_gestures(session, caps)  # the transport requires a fresh read first
+    r = session.gestures.write(args.gesture, args.side, args.gesture_action, 5)
+    pair = (r.assignments or {}).get(args.gesture)
+    if not r.success or not pair or pair[SIDES[args.side]] != args.gesture_action:
+        raise Fail("unconfirmed", str(r.message))
+    return {"gestures": {"assignments": gestures_json(r, caps), "allowed": allowed_gestures(caps)}}
+
+
+COMMANDS = {"probe": cmd_probe, "battery": cmd_battery, "latency": cmd_latency,
+            "eq": cmd_eq, "gestures": cmd_gestures}
+
+
+class Args:
+    pass
+
+
+def parse(argv):
+    """Strict positional parsing; anything unexpected is a usage error."""
+    a = Args()
+    if not argv or argv[0] not in COMMANDS:
+        raise Fail("usage")
+    a.command = argv[0]
+    rest = argv[1:]
+    if a.command in ("probe", "battery"):
+        if len(rest) != 1:
+            raise Fail("usage")
+        a.mac = rest[0]
+    else:
+        if len(rest) < 2 or rest[0] not in ("get", "set"):
+            raise Fail("usage")
+        a.action, a.mac, extra = rest[0], rest[1], rest[2:]
+        if a.action == "get" and extra:
+            raise Fail("usage")
+        if a.action == "set":
+            if a.command == "latency":
+                if len(extra) != 1 or extra[0] not in ("on", "off"):
+                    raise Fail("invalid_value")
+                a.value = extra[0]
+            elif a.command == "eq":
+                if len(extra) != 1 or not re.fullmatch(r"\d{1,3}", extra[0]):
+                    raise Fail("invalid_value")
+                a.profile = int(extra[0])
+            elif a.command == "gestures":
+                if len(extra) != 3 or not re.fullmatch(r"\d{1,5}", extra[0]) \
+                        or extra[1] not in SIDES or not re.fullmatch(r"\d{1,3}", extra[2]):
+                    raise Fail("invalid_value")
+                a.gesture, a.side, a.gesture_action = int(extra[0]), extra[1], int(extra[2])
+    if not MAC_RE.match(a.mac or ""):
+        raise Fail("invalid_mac")
+    return a
+
+
+def classify(exc):
+    if isinstance(exc, Fail):
+        return exc.code
+    if isinstance(exc, AuthError):
+        return "auth_failed"
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return "timeout"
+    if isinstance(exc, (ConnectionRefusedError,)) or \
+            (isinstance(exc, OSError) and exc.errno in (errno.ECONNREFUSED, errno.EBUSY, errno.EHOSTDOWN,
+                                                        errno.EHOSTUNREACH, errno.ECONNRESET)):
+        return "refused"
+    if isinstance(exc, ConnectionError) and exc.__cause__ is not None:
+        return classify(exc.__cause__)
+    if isinstance(exc, ConnectionError):
+        return "refused"
+    if isinstance(exc, ValueError):
+        return "protocol"
+    return "failed"
+
+
+def _deadline(signum, frame):
+    raise TimeoutError("buds-vendor deadline")
+
+
+def main(argv):
+    try:
+        args = parse(argv)
+    except Fail as f:
+        return emit({"ok": False, "error": f.code}, 2)
+    name, connected, uuids = device_info(args.mac)
+    if not connected:
+        return emit({"ok": False, "error": "not_connected"}, 1)
+    signal.signal(signal.SIGALRM, _deadline)
+    signal.alarm(DEADLINE_SECONDS)
+    session = None
+    try:
+        session = open_session(args.mac, name)
+        caps = session.capabilities
+        out = COMMANDS[args.command](session, caps, args)
+        return emit({"ok": True, "address": args.mac, **out})
+    except BaseException as exc:  # noqa: BLE001 — every failure becomes one JSON line
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        code = classify(exc)
+        debug(f"{args.command} failed: {code}: {type(exc).__name__}: {exc}")
+        out = {"ok": False, "error": code}
+        if isinstance(exc, Fail) and exc.detail and code == "unsupported":
+            out["feature"] = exc.detail
+        return emit(out, 1)
+    finally:
+        signal.alarm(0)
+        if session is not None:
+            session.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# headphones-ctl — the only place the headphones plugin changes system state.
+#
+#   status <MAC>                 JSON: card profiles, active profile, default sink,
+#                                autoswitch, media buttons, UUIDs
+#   set-profile <MAC> <profile>  switch the Bluetooth card profile
+#   set-default <MAC>            make the headphones the default audio output
+#   autoswitch on|off            WirePlumber headset-profile autoswitch (persisted)
+#   media-buttons on|off         AVRCP -> MPRIS forwarding (mpris-proxy user unit)
+#   connect|disconnect <MAC>     delegate to omarchy-bluetooth-device
+#
+# Every argument is validated before use, and every command receives its
+# arguments as separate words: nothing from a device or another command's
+# output is ever evaluated by a shell.
+
+set -euo pipefail
+export LC_ALL=C
+
+MAC_RE='^([0-9A-F]{2}:){5}[0-9A-F]{2}$'
+PROFILE_RE='^[a-z0-9_-]{1,64}$'
+AUTOSWITCH_KEY="bluetooth.autoswitch-to-headset-profile"
+MPRIS_UNIT="mpris-proxy.service"
+
+die() {
+  jq -cn --arg error "$1" '{ok: false, error: $error}'
+  exit "${2:-2}"
+}
+
+need_mac() {
+  [[ ${1:-} =~ $MAC_RE ]] || die "invalid_mac"
+}
+
+card_name() { echo "bluez_card.${1//:/_}"; }
+sink_prefix() { echo "bluez_output.${1//:/_}"; }
+
+card_json() {
+  local name
+  name=$(card_name "$1")
+  pactl --format=json list cards 2>/dev/null |
+    jq -c --arg name "$name" '[.[] | select(.name == $name) | {name, active_profile, profiles}] | .[0] // null'
+}
+
+autoswitch_state() {
+  local out
+  out=$(wpctl settings "$AUTOSWITCH_KEY" 2>/dev/null) || { echo null; return; }
+  case "${out##*:}" in
+    *true*) echo true ;;
+    *false*) echo false ;;
+    *) echo null ;;
+  esac
+}
+
+media_buttons_json() {
+  local available=false enabled=false active=false
+  if systemctl --user cat "$MPRIS_UNIT" >/dev/null 2>&1; then
+    available=true
+    systemctl --user is-enabled --quiet "$MPRIS_UNIT" 2>/dev/null && enabled=true
+    systemctl --user is-active --quiet "$MPRIS_UNIT" 2>/dev/null && active=true
+  fi
+  jq -cn --argjson a "$available" --argjson e "$enabled" --argjson r "$active" \
+    '{available: $a, enabled: $e, active: $r}'
+}
+
+uuids_json() {
+  bluetoothctl info "$1" 2>/dev/null |
+    grep -oE '\([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\)' |
+    tr -d '()' | tr 'A-F' 'a-f' | jq -Rsc 'split("\n") | map(select(length > 0)) | unique'
+}
+
+cmd_status() {
+  need_mac "${1:-}"
+  local mac=$1 card default prefix
+  card=$(card_json "$mac")
+  default=$(pactl get-default-sink 2>/dev/null || true)
+  prefix=$(sink_prefix "$mac")
+  jq -cn \
+    --arg mac "$mac" \
+    --argjson card "${card:-null}" \
+    --arg default "$default" \
+    --arg prefix "$prefix" \
+    --argjson autoswitch "$(autoswitch_state)" \
+    --argjson media "$(media_buttons_json)" \
+    --argjson uuids "$(uuids_json "$mac")" \
+    '{ok: true, address: $mac, card: $card,
+      isDefaultSink: ($default | startswith($prefix)),
+      autoswitch: $autoswitch, mediaButtons: $media, uuids: $uuids}'
+}
+
+cmd_set_profile() {
+  need_mac "${1:-}"
+  local mac=$1 profile=${2:-} card
+  [[ $profile =~ $PROFILE_RE ]] || die "invalid_profile"
+  card=$(card_json "$mac")
+  [[ $card != null && -n $card ]] || die "no_card"
+  jq -e --arg p "$profile" '.profiles | has($p)' <<<"$card" >/dev/null || die "unknown_profile"
+  pactl set-card-profile "$(card_name "$mac")" "$profile" || die "set_profile_failed" 1
+  jq -cn --arg p "$profile" '{ok: true, profile: $p}'
+}
+
+cmd_set_default() {
+  need_mac "${1:-}"
+  local prefix sink
+  prefix=$(sink_prefix "$1")
+  sink=$(pactl list sinks short 2>/dev/null | awk -v p="$prefix" 'index($2, p) == 1 { print $2; exit }')
+  [[ -n $sink ]] || die "no_sink"
+  pactl set-default-sink "$sink" || die "set_default_failed" 1
+  jq -cn --arg s "$sink" '{ok: true, sink: $s}'
+}
+
+# Sets SWITCH to true/false. Not run in a subshell, so die() reaches stdout.
+on_off() {
+  case "${1:-}" in
+    on) SWITCH=true ;;
+    off) SWITCH=false ;;
+    *) die "invalid_switch" ;;
+  esac
+}
+
+cmd_autoswitch() {
+  on_off "${1:-}"
+  wpctl settings --save "$AUTOSWITCH_KEY" "$SWITCH" >/dev/null || die "autoswitch_failed" 1
+  # WirePlumber writes saved settings to disk about a second later; a logout or
+  # restart inside that window would silently drop the choice. Wait for it.
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/sm-settings" i
+  for ((i = 0; i < 60; i++)); do
+    grep -qx "$AUTOSWITCH_KEY=$SWITCH" "$state" 2>/dev/null && break
+    sleep 0.05
+  done
+  ((i < 60)) || die "autoswitch_not_persisted" 1
+  jq -cn --argjson v "$(autoswitch_state)" '{ok: true, autoswitch: $v}'
+}
+
+cmd_media_buttons() {
+  on_off "${1:-}"
+  systemctl --user cat "$MPRIS_UNIT" >/dev/null 2>&1 || die "mpris_proxy_missing"
+  if [[ $SWITCH == true ]]; then
+    systemctl --user enable --now "$MPRIS_UNIT" >/dev/null 2>&1 || die "media_buttons_failed" 1
+  else
+    systemctl --user disable --now "$MPRIS_UNIT" >/dev/null 2>&1 || die "media_buttons_failed" 1
+  fi
+  jq -cn --argjson m "$(media_buttons_json)" '{ok: true, mediaButtons: $m}'
+}
+
+cmd_device() {
+  local action=$1
+  need_mac "${2:-}"
+  omarchy-bluetooth-device "$action" "$2" >/dev/null 2>&1 || die "${action}_failed" 1
+  jq -cn --arg a "$action" '{ok: true, action: $a}'
+}
+
+main() {
+  local cmd=${1:-}
+  shift || true
+  case "$cmd" in
+    status) cmd_status "$@" ;;
+    set-profile) cmd_set_profile "$@" ;;
+    set-default) cmd_set_default "$@" ;;
+    autoswitch) cmd_autoswitch "$@" ;;
+    media-buttons) cmd_media_buttons "$@" ;;
+    connect | disconnect) cmd_device "$cmd" "$@" ;;
+    *) die "usage" ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,89 @@
+[
+ {
+  "index": 513,
+  "name": "bluez_card.AA_BB_CC_DD_EE_01",
+  "driver": "module-bluez5-device.c",
+  "owner_module": null,
+  "properties": {
+   "device.api": "bluez5",
+   "device.bus": "bluetooth",
+   "api.bluez5.address": "AA:BB:CC:DD:EE:01",
+   "device.description": "Synthetic LDAC Headphones",
+   "device.name": "bluez_card.AA_BB_CC_DD_EE_01"
+  },
+  "profiles": {
+   "off": {
+    "description": "Off",
+    "sinks": 0,
+    "sources": 0,
+    "priority": 0,
+    "available": true
+   },
+   "a2dp-sink": {
+    "description": "High Fidelity Playback (A2DP Sink, codec SBC)",
+    "sinks": 1,
+    "sources": 0,
+    "priority": 130,
+    "available": true
+   },
+   "a2dp-sink-aac": {
+    "description": "High Fidelity Playback (A2DP Sink, codec AAC)",
+    "sinks": 1,
+    "sources": 0,
+    "priority": 132,
+    "available": true
+   },
+   "a2dp-sink-ldac": {
+    "description": "High Fidelity Playback (A2DP Sink, codec LDAC)",
+    "sinks": 1,
+    "sources": 0,
+    "priority": 134,
+    "available": true
+   },
+   "headset-head-unit": {
+    "description": "Headset Head Unit (HSP/HFP, codec LC3-SWB)",
+    "sinks": 1,
+    "sources": 1,
+    "priority": 6,
+    "available": true
+   },
+   "headset-head-unit-cvsd": {
+    "description": "Headset Head Unit (HSP/HFP, codec CVSD)",
+    "sinks": 1,
+    "sources": 1,
+    "priority": 4,
+    "available": false
+   }
+  },
+  "active_profile": "a2dp-sink-ldac",
+  "ports": {}
+ },
+ {
+  "index": 600,
+  "name": "bluez_card.AA_BB_CC_DD_EE_02",
+  "driver": "module-bluez5-device.c",
+  "owner_module": null,
+  "properties": {
+   "device.api": "bluez5",
+   "api.bluez5.address": "AA:BB:CC:DD:EE:02"
+  },
+  "profiles": {
+   "off": {
+    "description": "Off",
+    "sinks": 0,
+    "sources": 0,
+    "priority": 0,
+    "available": true
+   },
+   "a2dp-sink": {
+    "description": "High Fidelity Playback (A2DP Sink, codec SBC)",
+    "sinks": 1,
+    "sources": 0,
+    "priority": 130,
+    "available": true
+   }
+  },
+  "active_profile": "a2dp-sink",
+  "ports": {}
+ }
+]

@@ -1,0 +1,52 @@
+[
+  {
+    "name": "bluez_card.AA_BB_CC_DD_EE_FF",
+    "driver": "module-bluez5-device.c",
+    "active_profile": "a2dp-sink",
+    "profiles": {
+      "off": {
+        "description": "Off",
+        "sinks": 0,
+        "sources": 0,
+        "priority": 0,
+        "available": true
+      },
+      "a2dp-sink": {
+        "description": "High Fidelity Playback (A2DP Sink, codec SBC)",
+        "sinks": 1,
+        "sources": 0,
+        "priority": 132,
+        "available": true
+      },
+      "a2dp-sink-sbc_xq": {
+        "description": "High Fidelity Playback (A2DP Sink, codec SBC-XQ)",
+        "sinks": 1,
+        "sources": 0,
+        "priority": 131,
+        "available": true
+      },
+      "headset-head-unit-cvsd": {
+        "description": "Headset Head Unit (HSP/HFP, codec CVSD)",
+        "sinks": 1,
+        "sources": 1,
+        "priority": 4,
+        "available": true
+      },
+      "headset-head-unit": {
+        "description": "Headset Head Unit (HSP/HFP, codec MSBC)",
+        "sinks": 1,
+        "sources": 1,
+        "priority": 5,
+        "available": true
+      }
+    },
+    "properties": {
+      "device.api": "bluez5",
+      "device.bus": "bluetooth",
+      "device.name": "bluez_card.AA_BB_CC_DD_EE_FF",
+      "device.description": "Redmi Buds 6 Play",
+      "device.icon_name": "audio-headset-bluetooth",
+      "api.bluez5.address": "AA:BB:CC:DD:EE:FF"
+    }
+  }
+]
